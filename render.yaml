@@ -1,0 +1,24 @@
+# Render blueprint for the RoleReady FastAPI backend.
+# Deploy: Render dashboard → New → Blueprint → pick this repo.
+# Then set the secret env vars in the Render dashboard (marked sync:false).
+services:
+  - type: web
+    name: roleready-backend
+    runtime: python
+    plan: free
+    rootDir: .
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn backend.server:app --host 0.0.0.0 --port $PORT
+    envVars:
+      - key: PYTHON_VERSION
+        value: "3.12.7"
+      - key: TAVILY_API_KEY
+        sync: false
+      - key: GOOGLE_API_KEY
+        sync: false
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_KEY
+        sync: false
+      - key: ALLOWED_ORIGINS
+        sync: false   # set to your Vercel domain, e.g. https://roleready.vercel.app
