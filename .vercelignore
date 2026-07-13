@@ -1,0 +1,14 @@
+# Keep the backend deployment lean — Vercel Python functions have a size limit.
+# Excluding pyproject/uv.lock forces Vercel to install from requirements.txt
+# (the dev environment's pyproject includes heavy, unused packages like
+# streamlit/chromadb that would blow the serverless bundle).
+pyproject.toml
+uv.lock
+frontend
+legacy
+resumes
+chroma_db
+.streamlit
+AGENTS.md
+README.md
+render.yaml

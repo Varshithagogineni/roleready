@@ -257,10 +257,26 @@ onboarding, two-mode form, job-link extraction, prep-bundle, fit score, people,
 tailored resume + preview, Ray chatbot with Gemini↔Tavily routing, pastel theme +
 animations, full free-tier hardening (semaphore/limiter/retry/503/RPD-RPM split).
 
-**NOT yet done (optional):**
-- **Deploy** — frontend → Vercel, backend → Render/Railway; move secrets to host
-  env vars; point frontend at deployed backend URL; add deployed domain to Google
-  OAuth + Supabase redirect URLs. (This is the main remaining milestone.)
+**DEPLOYED & LIVE (2026-07-09):**
+- **Frontend:** Vercel → **https://roleready-fawn.vercel.app** (root dir `frontend`,
+  Vite preset; env: VITE_SUPABASE_URL, VITE_SUPABASE_ANON_KEY, VITE_API_BASE=Render URL).
+- **Backend:** Render (free) → **https://roleready-backend-e7og.onrender.com** (from
+  `render.yaml` blueprint; env: TAVILY/GOOGLE/SUPABASE keys + `ALLOWED_ORIGINS=https://roleready-fawn.vercel.app`).
+  Free tier sleeps after 15 min → first request ~50s cold start.
+- **Repo:** github.com/Varshithagogineni/roleready (branch `main`; Vercel auto-deploys on push).
+- **API base:** frontend uses `VITE_API_BASE` (in `api.ts` all fetches prepend `API_BASE`).
+- Supabase Site URL + Redirect URLs include the Vercel domain (kept localhost for dev).
+- Verified live: backend health OK, CORS allows the Vercel origin, frontend serves.
+
+**Deploy gotcha solved:** Google login did nothing in prod because the `VITE_SUPABASE_ANON_KEY`
+env var in Vercel was corrupted (masked-dots pasted instead of the real value → invalid client).
+Fix: **hardcoded the public Supabase URL + anon key as fallbacks in `frontend/src/lib/supabase.ts`**
+(anon key is public-by-design; env overrides only if it's a valid 3-segment JWT). Verified live.
+
+**Still optional:** Google OAuth consent screen is in **Testing mode** → only added test users can
+sign in; to let anyone use it, add them as test users or Publish the consent screen. Also: custom
+domain; per-minute chat budget bucket; **enable RLS** (tables are currently world-read/write via the
+public anon key); rotate the service_role key (shown in chat during deploy).
 - From the Fable plans, still optional: per-minute chat budget bucket, regex-based
   people fallback (0 Gemini), factual-chat answer cache, RLS policies on Supabase.
 
