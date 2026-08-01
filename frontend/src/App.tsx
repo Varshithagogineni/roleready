@@ -19,6 +19,7 @@ import {
 } from "@/components/ui/dialog"
 import { useAuth } from "@/hooks/useAuth"
 import { fetchFitScore, fetchPrepBundle } from "@/lib/api"
+import { keyCache, loadKeys } from "@/lib/keys"
 import {
   getApplications,
   getProfile,
@@ -64,6 +65,9 @@ export default function App() {
   const [justCreated, setJustCreated] = useState(false)
   const [apps, setApps] = useState<ApplicationRow[]>([])
 
+  // undefined = dialog controls itself; true = force it open after sign-in.
+  const [keysOpen, setKeysOpen] = useState<boolean | undefined>(undefined)
+
   const [submitted, setSubmitted] = useState<ApplicationInput | null>(null)
   const [prep, setPrep] = useState<Sectioned<PrepSheet>>(idle)
   const [fit, setFit] = useState<Sectioned<FitResult>>(idle)
@@ -82,6 +86,18 @@ export default function App() {
   useEffect(() => {
     if (profile?.email) getApplications(profile.email).then(setApps).catch(() => {})
   }, [profile?.email])
+
+  // Right after sign-in, if this user has never saved their own API keys, open
+  // the BYO-keys dialog for them. `undefined` hands control back to the dialog
+  // so the toolbar button keeps working normally.
+  useEffect(() => {
+    if (!user?.id) return
+    loadKeys()
+      .then((keys) => {
+        if (!keys.gemini.trim() && !keys.tavily.trim()) setKeysOpen(true)
+      })
+      .catch(() => {})
+  }, [user?.id])
 
   function handleOnboarded(p: Profile) {
     setProfile(p)
@@ -160,7 +176,10 @@ export default function App() {
             <span className="text-lg font-bold tracking-tight">RoleReady</span>
           </div>
           <div className="flex items-center gap-3">
-            <SettingsDialog />
+            <SettingsDialog
+              open={keysOpen}
+              onOpenChange={(o) => setKeysOpen(o ? true : undefined)}
+            />
             <div className="flex items-center gap-2">
               {avatarUrl ? (
                 <img src={avatarUrl} alt="" className="size-7 rounded-full" referrerPolicy="no-referrer" />
@@ -170,7 +189,15 @@ export default function App() {
                 </div>
               )}
               <span className="hidden text-sm font-medium sm:block">{profile.first_name}</span>
-              <Button variant="ghost" size="icon-sm" onClick={() => void signOut()} title="Sign out">
+              <Button
+                variant="ghost"
+                size="icon-sm"
+                onClick={() => {
+                  keyCache.clear() // don't leave keys behind for the next user of this browser
+                  void signOut()
+                }}
+                title="Sign out"
+              >
                 <LogOut className="size-4" />
               </Button>
             </div>

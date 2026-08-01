@@ -7,3 +7,7 @@ pypdf==6.14.2
 tavily-python==0.7.26
 langchain-core==1.4.8
 langchain-google-genai==4.2.6
+# MCP server (main.py serves it at /mcp alongside the REST API)
+fastmcp==3.4.5
+authlib==1.7.2
+httpx==0.28.1

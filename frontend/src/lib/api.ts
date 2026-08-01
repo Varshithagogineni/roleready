@@ -2,9 +2,10 @@
  *
  * BYO keys: if the user saved their own Gemini/Tavily keys (Settings),
  * they are sent as request headers and used server-side for that request.
- * Keys live ONLY in this browser's localStorage.
+ * Keys are stored per-user in Supabase — see ./keys.
  */
 
+import { keyCache } from "./keys"
 import type {
   FitResult,
   PeopleResult,
@@ -16,28 +17,9 @@ import type {
 // In prod set VITE_API_BASE to the deployed backend URL (e.g. Render).
 const API_BASE = import.meta.env.VITE_API_BASE ?? ""
 
-const GEMINI_KEY_STORAGE = "roleready.geminiKey"
-const TAVILY_KEY_STORAGE = "roleready.tavilyKey"
-
-export const keyStore = {
-  getGemini: () => localStorage.getItem(GEMINI_KEY_STORAGE) ?? "",
-  getTavily: () => localStorage.getItem(TAVILY_KEY_STORAGE) ?? "",
-  save(gemini: string, tavily: string) {
-    gemini.trim()
-      ? localStorage.setItem(GEMINI_KEY_STORAGE, gemini.trim())
-      : localStorage.removeItem(GEMINI_KEY_STORAGE)
-    tavily.trim()
-      ? localStorage.setItem(TAVILY_KEY_STORAGE, tavily.trim())
-      : localStorage.removeItem(TAVILY_KEY_STORAGE)
-  },
-  hasAny: () =>
-    Boolean(localStorage.getItem(GEMINI_KEY_STORAGE) || localStorage.getItem(TAVILY_KEY_STORAGE)),
-}
-
 function keyHeaders(): Record<string, string> {
   const headers: Record<string, string> = {}
-  const gemini = keyStore.getGemini()
-  const tavily = keyStore.getTavily()
+  const { gemini, tavily } = keyCache.get()
   if (gemini) headers["X-Gemini-Key"] = gemini
   if (tavily) headers["X-Tavily-Key"] = tavily
   return headers
