@@ -24,7 +24,7 @@ app = FastAPI(title="RoleReady API", version="1.0.0")
 
 # Allowed origins come from env (comma-separated) so prod can add its domain.
 # Defaults cover local dev.
-_default_origins = "http://localhost:5173,http://127.0.0.1:5173"
+_default_origins = "http://localhost:5173,http://127.0.0.1:5173,https://roleready-fawn.vercel.app"
 ALLOWED_ORIGINS = [o.strip() for o in os.getenv("ALLOWED_ORIGINS", _default_origins).split(",") if o.strip()]
 
 app.add_middleware(

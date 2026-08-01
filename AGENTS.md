@@ -277,6 +277,45 @@ Fix: **hardcoded the public Supabase URL + anon key as fallbacks in `frontend/sr
 sign in; to let anyone use it, add them as test users or Publish the consent screen. Also: custom
 domain; per-minute chat budget bucket; **enable RLS** (tables are currently world-read/write via the
 public anon key); rotate the service_role key (shown in chat during deploy).
+
+---
+
+## ✅ DONE (2026-07-13): backend moved Render → Vercel, fully verified
+
+**Why:** Render free tier sleeps after 15 min → ~50s cold start. Moved the backend to Vercel
+serverless (caveats accepted: Vercel function timeout is 60s max via `vercel.json` maxDuration —
+prep-bundle measured at ~30s so it fits; the global semaphore/rate-limiter are **best-effort
+per-instance** on serverless, not truly global).
+
+**Final state (both halves on Vercel, no Render dependency for live traffic):**
+- **Backend:** Vercel `roleready-api` (team `varshitha-goginenis-projects`,
+  team id `team_W7LAxCiAMG3PH7ED28byRXEj`). URL: `https://roleready-api-varshitha-goginenis-projects.vercel.app`.
+  Deployed via the **Vercel MCP `deploy_to_vercel`** (explicit file tree — NOT git-connected, so
+  it does NOT auto-deploy on push; re-run the plugin or dashboard Redeploy to update it).
+  Deployment Protection = disabled ✓. Env vars `GOOGLE_API_KEY` + `TAVILY_API_KEY` set ✓.
+  `ALLOWED_ORIGINS` NOT set — frontend origin is baked into `server.py` default, CORS confirmed working.
+- **Frontend:** `roleready` (git-connected). `VITE_API_BASE` = the roleready-api URL above
+  (added as a non-sensitive env var, Production+Preview), redeployed so it's baked into the bundle.
+
+**Verified live 2026-07-13:** frontend bundle calls only the Vercel backend (Render URL gone);
+`/api/health` ok; CORS allows `roleready-fawn.vercel.app`; real `/api/chat` returns answers+sources;
+real `/api/prep-bundle` → HTTP 200 in 30.7s (under the 60s cap, but not by much — watch it).
+
+**Optional remaining cleanup:**
+- Suspend the Render `roleready-backend` service (no longer needed for live traffic; render.yaml
+  still in repo so it can be revived). Not yet done.
+- To re-run the prep-bundle timing headroom check if searches get slower, or raise maxDuration.
+
+**GOTCHA fixed this session:** a root `.vercelignore` (added for the backend bundle, listing
+`frontend`) broke the **git-connected frontend** build — Vercel applied it repo-wide and deleted
+`frontend/` → `vite build exited 127`. Removed `.vercelignore` + `vercel.json` from the repo
+(commit b8e927c). The plugin backend carries its own `vercel.json` (maxDuration 60, fluid) inside
+the deploy file tree — do NOT re-add a root `.vercelignore`/`vercel.json` to the git repo.
+
+**Repo/deploy facts:** GitHub `github.com/Varshithagogineni/roleready` (branch `main`). Pushes need
+a GitHub PAT (fine-grained, `roleready` repo, Contents R/W; user has it — one-shot in the push URL,
+not stored). Frontend `roleready` is git-connected (auto-deploys on push). Render backend is also
+git-connected (render.yaml). `requirements.txt` was trimmed to the 9 backend deps.
 - From the Fable plans, still optional: per-minute chat budget bucket, regex-based
   people fallback (0 Gemini), factual-chat answer cache, RLS policies on Supabase.
 
