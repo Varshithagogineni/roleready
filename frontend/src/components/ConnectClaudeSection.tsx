@@ -97,11 +97,14 @@ export function ConnectClaudeSection({ userId }: { userId: string | undefined })
       </div>
 
       {fresh ? (
-        <div className="space-y-3 rounded-md border border-amber-500/40 bg-amber-500/5 p-3">
-          <div>
+        <div className="space-y-3 overflow-hidden rounded-md border border-amber-500/40 bg-amber-500/5 p-3">
+          <div className="min-w-0">
             <Label className="text-xs">Your connection code</Label>
-            <div className="mt-1 flex items-center gap-2">
-              <code className="flex-1 truncate rounded bg-muted px-2 py-1.5 text-xs">
+            {/* min-w-0 on the flex child is what actually lets `truncate` work:
+                flex items default to min-width:auto and won't shrink below
+                their content, so a long unbreakable string widens the dialog. */}
+            <div className="mt-1 flex min-w-0 items-center gap-2">
+              <code className="min-w-0 flex-1 truncate rounded bg-muted px-2 py-1.5 text-xs">
                 {fresh}
               </code>
               <CopyButton value={fresh} label="Copy" />
@@ -111,17 +114,24 @@ export function ConnectClaudeSection({ userId }: { userId: string | undefined })
             </p>
           </div>
 
-          <div>
+          <div className="min-w-0">
             <Label className="text-xs">Then run this in your terminal</Label>
-            <div className="mt-1 flex items-center gap-2">
-              <code className="flex-1 truncate rounded bg-muted px-2 py-1.5 text-xs">
+            <div className="mt-1 flex min-w-0 items-center gap-2">
+              <code className="min-w-0 flex-1 truncate rounded bg-muted px-2 py-1.5 text-xs">
                 {connectCommand(fresh)}
               </code>
               <CopyButton value={connectCommand(fresh)} label="Copy" />
             </div>
           </div>
 
-          <Button variant="outline" size="sm" onClick={() => setFresh(null)}>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => {
+              setFresh(null)
+              void refresh() // pick up the new code's "last used" state
+            }}
+          >
             Done
           </Button>
         </div>
@@ -150,9 +160,9 @@ export function ConnectClaudeSection({ userId }: { userId: string | undefined })
           {tokens.map((t) => (
             <li
               key={t.id}
-              className="flex items-center justify-between gap-2 rounded border px-2 py-1.5 text-xs"
+              className="flex min-w-0 items-center justify-between gap-2 rounded border px-2 py-1.5 text-xs"
             >
-              <span className="truncate">
+              <span className="min-w-0 flex-1 truncate">
                 <code>{t.token_prefix}…</code>
                 {t.label && <span className="text-muted-foreground"> · {t.label}</span>}
                 <span className="text-muted-foreground"> · last used {when(t.last_used_at)}</span>

@@ -115,7 +115,8 @@ export function SettingsDialog({ open: openProp, onOpenChange }: SettingsDialogP
           </Button>
         }
       />
-      <DialogContent className="sm:max-w-md">
+      {/* Wider than the old key-only dialog: it now also shows a terminal command. */}
+      <DialogContent className="max-h-[85vh] overflow-y-auto sm:max-w-lg">
         <DialogHeader>
           <DialogTitle>Use your own API keys</DialogTitle>
           <DialogDescription>
