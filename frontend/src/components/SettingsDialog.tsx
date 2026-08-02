@@ -1,4 +1,5 @@
-import { useState } from "react"
+import { useEffect, useState } from "react"
+import { ConnectClaudeSection } from "@/components/ConnectClaudeSection"
 import { Button } from "@/components/ui/button"
 import {
   Dialog,
@@ -11,7 +12,9 @@ import {
 } from "@/components/ui/dialog"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
-import { keyStore, validateKeys } from "@/lib/api"
+import { useAuth } from "@/hooks/useAuth"
+import { validateKeys } from "@/lib/api"
+import { keyCache, loadKeys, saveKeys } from "@/lib/keys"
 import { KeyRound, Loader2 } from "lucide-react"
 
 type KeyStatus = boolean | null
@@ -27,14 +30,48 @@ function StatusDot({ status }: { status: KeyStatus }) {
   )
 }
 
-/** Bring-your-own-API-keys dialog. Keys are stored only in localStorage. */
-export function SettingsDialog() {
-  const [open, setOpen] = useState(false)
-  const [gemini, setGemini] = useState(keyStore.getGemini())
-  const [tavily, setTavily] = useState(keyStore.getTavily())
+interface SettingsDialogProps {
+  /** Controlled open state — App opens this automatically right after sign-in
+   *  when the user has no keys saved yet. Omit for the normal toolbar button. */
+  open?: boolean
+  onOpenChange?: (open: boolean) => void
+}
+
+/** Bring-your-own-API-keys dialog. Keys are saved to the signed-in user's
+ *  Supabase account, so they work in the web app AND the RoleReady MCP server. */
+export function SettingsDialog({ open: openProp, onOpenChange }: SettingsDialogProps = {}) {
+  const { user } = useAuth()
+  const [openState, setOpenState] = useState(false)
+  const open = openProp ?? openState
+
+  function setOpen(next: boolean) {
+    setOpenState(next)
+    onOpenChange?.(next)
+  }
+
+  const [gemini, setGemini] = useState("")
+  const [tavily, setTavily] = useState("")
   const [checking, setChecking] = useState(false)
+  const [saving, setSaving] = useState(false)
+  const [error, setError] = useState<string | null>(null)
   const [geminiStatus, setGeminiStatus] = useState<KeyStatus>(null)
   const [tavilyStatus, setTavilyStatus] = useState<KeyStatus>(null)
+
+  // Pull the saved keys from Supabase whenever the dialog opens.
+  useEffect(() => {
+    if (!open) return
+    const cached = keyCache.get()
+    setGemini(cached.gemini)
+    setTavily(cached.tavily)
+    loadKeys()
+      .then((keys) => {
+        setGemini(keys.gemini)
+        setTavily(keys.tavily)
+      })
+      .catch(() => {
+        /* keep the cached values */
+      })
+  }, [open])
 
   async function handleTest() {
     if (!gemini.trim() && !tavily.trim()) return
@@ -48,9 +85,21 @@ export function SettingsDialog() {
     }
   }
 
-  function handleSave() {
-    keyStore.save(gemini, tavily)
-    setOpen(false)
+  async function handleSave() {
+    if (!user) {
+      setError("Sign in with Google first so your keys can be saved to your account.")
+      return
+    }
+    setSaving(true)
+    setError(null)
+    try {
+      await saveKeys(user.id, { gemini, tavily })
+      setOpen(false)
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Could not save your keys.")
+    } finally {
+      setSaving(false)
+    }
   }
 
   return (
@@ -60,18 +109,20 @@ export function SettingsDialog() {
           <Button variant="outline" size="sm">
             <KeyRound className="size-4" />
             API keys
-            {keyStore.hasAny() && (
+            {keyCache.hasAny() && (
               <span className="size-2 rounded-full bg-emerald-500" />
             )}
           </Button>
         }
       />
-      <DialogContent className="sm:max-w-md">
+      {/* Wider than the old key-only dialog: it now also shows a terminal command. */}
+      <DialogContent className="max-h-[85vh] overflow-y-auto sm:max-w-lg">
         <DialogHeader>
           <DialogTitle>Use your own API keys</DialogTitle>
           <DialogDescription>
-            Your keys are stored only in this browser and used just for your
-            requests. Leave blank to use the app's shared keys (rate-limited).
+            RoleReady runs on your own free Gemini and Tavily keys. They're saved
+            to your account, so they work here and in the RoleReady MCP server
+            from Claude. Both have generous free tiers.
           </DialogDescription>
         </DialogHeader>
 
@@ -108,6 +159,9 @@ export function SettingsDialog() {
               }}
             />
           </div>
+          {error && <p className="text-sm text-red-500">{error}</p>}
+
+          <ConnectClaudeSection userId={user?.id} />
         </div>
 
         <DialogFooter>
@@ -119,7 +173,10 @@ export function SettingsDialog() {
             {checking && <Loader2 className="size-4 animate-spin" />}
             Test keys
           </Button>
-          <Button onClick={handleSave}>Save</Button>
+          <Button onClick={handleSave} disabled={saving}>
+            {saving && <Loader2 className="size-4 animate-spin" />}
+            Save
+          </Button>
         </DialogFooter>
       </DialogContent>
     </Dialog>

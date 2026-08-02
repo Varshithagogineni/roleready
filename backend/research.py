@@ -4,10 +4,37 @@ standalone prep-sheet / people functions used as fallbacks."""
 
 import time
 from typing import Optional
+from urllib.parse import urlsplit, parse_qs
 
 from backend.config import DailyQuotaError, make_llm, run_gemini, tavily_client
 from backend.schemas import JobPosting, PeopleResult, PrepBundle, PrepSheet
 from backend.tavily_utils import parallel_search
+
+# Tavily caps a search query at 400 chars; long job URLs (esp. LinkedIn, which
+# tack on tracking params) blow past that. Keep a safe margin.
+_MAX_TAVILY_QUERY = 390
+
+
+def _canonical_job_url(url: str) -> str:
+    """LinkedIn search-results URLs bury the real job id in ?currentJobId=.
+    Rewrite them to the canonical /jobs/view/<id> page, which is far more
+    extractable than the login-walled search page."""
+    parts = urlsplit(url)
+    if "linkedin.com" in parts.netloc and parts.query:
+        qs = parse_qs(parts.query)
+        job_id = (qs.get("currentJobId") or qs.get("jobId") or [""])[0]
+        if job_id.isdigit():
+            return f"https://www.linkedin.com/jobs/view/{job_id}"
+    return url
+
+
+def _search_query_from_url(url: str) -> str:
+    """Build a short Tavily-safe search query from a (possibly huge) job URL.
+    Drops the query string / tracking params and caps the length so we never
+    trip Tavily's 400-char limit."""
+    parts = urlsplit(url)
+    clean = f"{parts.netloc}{parts.path}".strip("/") or url
+    return clean[:_MAX_TAVILY_QUERY]
 
 
 # ── Job-link extraction (1 Gemini call) ──────────────────────────────────────
@@ -16,13 +43,16 @@ def extract_job_posting(
     url: str,
     gemini_key: Optional[str] = None, tavily_key: Optional[str] = None,
 ) -> JobPosting:
+    url = _canonical_job_url(url)
     client = tavily_client(tavily_key)
     res = client.extract(urls=[url])
     results = res.get("results", [])
     content = (results[0].get("raw_content") or "") if results else ""
 
     if not content.strip():
-        search = client.search(query=url, max_results=3, search_depth="advanced")
+        search = client.search(
+            query=_search_query_from_url(url), max_results=3, search_depth="advanced",
+        )
         content = "\n\n".join((r.get("content") or "") for r in search.get("results", []))
 
     if not content.strip():
