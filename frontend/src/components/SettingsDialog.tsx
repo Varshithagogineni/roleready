@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react"
+import { ConnectClaudeSection } from "@/components/ConnectClaudeSection"
 import { Button } from "@/components/ui/button"
 import {
   Dialog,
@@ -158,6 +159,8 @@ export function SettingsDialog({ open: openProp, onOpenChange }: SettingsDialogP
             />
           </div>
           {error && <p className="text-sm text-red-500">{error}</p>}
+
+          <ConnectClaudeSection userId={user?.id} />
         </div>
 
         <DialogFooter>

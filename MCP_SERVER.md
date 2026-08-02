@@ -41,25 +41,34 @@ a shared quota. How a key is found depends on how the server is running.
 2. A dialog asks for their Gemini + Tavily keys; they're saved to the
    `user_api_keys` table, one row per user. RLS means a row is readable in the
    browser only by its owner.
-3. In Claude, they connect to the MCP server and sign in with the **same Google
-   account**. FastMCP verifies the Google token and gets their verified email.
-4. The server resolves that email to their saved keys via
-   `api_keys_for_email()` — a `SECURITY DEFINER` function that **only
-   service_role may execute**, so the join happens inside the database and the
-   lookup can't be invoked from a browser or with the anon key.
+3. In the same dialog, **Use RoleReady in Claude** generates a **connection
+   code**. The code is created in their browser; only its SHA-256 hash reaches
+   `mcp_tokens`. The plaintext is shown once and never touches the server.
+4. They paste the generated `claude mcp add …` command, which sends the code as
+   `Authorization: Bearer <code>`.
+5. The server hashes what it receives and calls `keys_for_mcp_token()` — a
+   `SECURITY DEFINER` function that **only service_role may execute** — which
+   goes hash → user → their keys inside the database and stamps `last_used_at`.
 
-Paste keys once in the browser; they work in the web app and in Claude. If no
-keys are saved, every tool returns a clear message telling them where to add them.
+Paste keys once in the browser; they work in the web app and in Claude. Codes are
+revocable per device, and an unknown or revoked code is refused outright — the
+server never falls back to its own `.env` keys when deployed, so a stranger can
+never spend the owner's quota.
 
-> **Why Google rather than a Supabase JWT.** MCP clients register themselves as
-> an OAuth client on the fly. Supabase Auth doesn't support that, and Claude
-> refuses with *"Incompatible auth server: does not support dynamic client
-> registration"*. FastMCP's Google provider is an OAuth **proxy**: it offers
-> dynamic registration to clients while using one fixed Google app upstream.
+> **Why codes rather than OAuth.** MCP clients register themselves as an OAuth
+> client on the fly. Supabase Auth doesn't support that, and Claude refuses with
+> *"Incompatible auth server: does not support dynamic client registration"*.
+> A Google OAuth proxy does work — see commit `4a2031a`, which is the right
+> answer for **Claude Desktop**, whose connector dialog offers only OAuth.
+> Codes are the CLI-first step; Desktop support is planned separately.
 >
-> The trade-off: identity is a Google account rather than a Supabase session, so
-> the key lookup uses `service_role` instead of RLS. The email is taken from
-> Google's verified token — never from anything the caller supplies.
+> No FastMCP auth provider is installed, so the transport never returns `401` —
+> a `401` would make Claude start an OAuth flow, which is what we're avoiding.
+> A bad code fails as a normal, readable tool error.
+>
+> Trade-off, recorded deliberately: a code is a long-lived bearer secret. It is
+> hashed at rest, shown once, and revocable — but anyone holding it can use that
+> user's keys, so it belongs in a config file, not a screenshot.
 
 ### Local (stdio) — how you develop
 
@@ -105,32 +114,27 @@ The MCP app is the **outer** app with the REST API mounted beneath it. That's
 deliberate: FastMCP advertises its OAuth discovery document at the host root, so
 mounting MCP under a prefix makes discovery 404 and the OAuth flow fails silently.
 
-| `/authorize`, `/token`, `/register` | the OAuth endpoints FastMCP exposes as a proxy to Google |
-| `/auth/callback` | where Google returns after sign-in |
-
 Required env vars in Vercel:
 
 ```
 MCP_REQUIRE_AUTH=true
-MCP_BASE_URL=https://<your-deployment>      # host root — do NOT append /mcp
 SUPABASE_URL=https://<project>.supabase.co
 SUPABASE_SERVICE_ROLE_KEY=eyJ...            # server-side only
-GOOGLE_OAUTH_CLIENT_ID=xxxx.apps.googleusercontent.com
-GOOGLE_OAUTH_CLIENT_SECRET=...
 ```
 
-The Google OAuth app must list `<MCP_BASE_URL>/auth/callback` under
-**Authorised redirect URIs**, and the consent screen must be **published** —
-while it's in Testing mode only accounts added as test users can sign in.
-
-A user then connects with no keys or secrets in the command:
+A user connects with the command the web app generates for them:
 
 ```bash
-claude mcp add --transport http roleready https://<your-deployment>/mcp
+claude mcp add --transport http roleready https://<your-deployment>/mcp \
+  --header "Authorization: Bearer rr_live_..."
 ```
 
-Their browser opens, they sign in with Google, and their saved keys are used
-automatically.
+Their saved keys are then used automatically.
+
+> **Claude Desktop** cannot do this yet: its *Add custom connector* dialog takes
+> a URL plus optional OAuth client credentials, with no field for a custom
+> header. (Request-header auth exists but is a gated beta.) Desktop support
+> means restoring the OAuth path from `4a2031a`.
 
 ---
 

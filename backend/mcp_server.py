@@ -16,6 +16,7 @@ MCP clients launch servers in an isolated environment, we load that .env by
 absolute path below rather than relying on the caller's shell.
 """
 
+import hashlib
 import os
 import sys
 from pathlib import Path
@@ -46,64 +47,37 @@ from backend.schemas import (  # noqa: E402
     TailoredResume,
 )
 
-# ── Auth ──────────────────────────────────────────────────────────────────────
-# Auth applies ONLY to HTTP transports; stdio inherits the security of the local
-# machine that spawned it. So we make it opt-in: local stdio dev stays
-# frictionless, while the deployed HTTP server requires a Google sign-in.
+# ── Identifying the caller ────────────────────────────────────────────────────
+# The deployed server identifies each caller by a "connection code" they
+# generate in the RoleReady web app while signed in. Claude sends it as
+# `Authorization: Bearer <code>`; we hash it and look up whose it is.
 #
-# Enable with:  MCP_REQUIRE_AUTH=true  MCP_BASE_URL=https://<deployed-host>
+# Enable with:  MCP_REQUIRE_AUTH=true   (local stdio dev leaves it off and uses
+# the project .env, so development stays frictionless).
 #
-# Why Google and not Supabase: MCP clients expect to register themselves as an
-# OAuth client on the fly (dynamic client registration). Supabase Auth does not
-# offer that — Claude reports "Incompatible auth server: does not support
-# dynamic client registration" and cannot connect at all. FastMCP's Google
-# provider is an OAuth *proxy*: it presents dynamic registration to clients
-# while using one fixed Google OAuth app upstream. Users sign in with the same
-# Google account they use on the RoleReady website, so their saved keys match.
+# Deliberately NOT OAuth. MCP clients expect to register themselves as an OAuth
+# client on the fly, which Supabase Auth cannot do — Claude fails outright with
+# "Incompatible auth server: does not support dynamic client registration". A
+# Google OAuth proxy does work (see commit 4a2031a) and is the right answer for
+# Claude Desktop, whose connector dialog only offers OAuth. Codes are the
+# CLI-first step; Desktop support is planned separately.
+#
+# No FastMCP auth provider is installed, so the transport never returns a 401 —
+# a 401 would make Claude start an OAuth flow, which is exactly what we are
+# avoiding. An unknown code fails as a normal, readable tool error instead.
 
 AUTH_ENABLED = os.getenv("MCP_REQUIRE_AUTH", "").strip().lower() in ("1", "true", "yes")
 SUPABASE_URL = (os.getenv("SUPABASE_URL") or "").strip().rstrip("/")
-# service_role: needed because a Google-authenticated caller has no Supabase JWT
-# for RLS to act on. Never expose this beyond the server.
+# service_role: the caller has no Supabase session of their own, so RLS has
+# nothing to act on and the lookup runs through a locked-down function instead.
+# Never expose this beyond the server.
 SUPABASE_SERVICE_KEY = (
     os.getenv("SUPABASE_SERVICE_ROLE_KEY") or os.getenv("SUPABASE_KEY") or ""
 ).strip()
 
 
-def _build_auth():
-    if not AUTH_ENABLED:
-        return None
-
-    from fastmcp.server.auth.providers.google import GoogleProvider
-
-    client_id = (os.getenv("GOOGLE_OAUTH_CLIENT_ID") or "").strip()
-    client_secret = (os.getenv("GOOGLE_OAUTH_CLIENT_SECRET") or "").strip()
-    base_url = (os.getenv("MCP_BASE_URL") or "").strip()
-
-    if not client_id or not client_secret:
-        raise RuntimeError(
-            "MCP_REQUIRE_AUTH is on but GOOGLE_OAUTH_CLIENT_ID / "
-            "GOOGLE_OAUTH_CLIENT_SECRET are not set."
-        )
-    if not base_url:
-        raise RuntimeError(
-            "MCP_REQUIRE_AUTH is on but MCP_BASE_URL is not set "
-            "(the public URL this MCP server is reachable at)."
-        )
-
-    # The Google OAuth app must list <base_url>/auth/callback as an authorised
-    # redirect URI — that path is FastMCP's default and is where Google returns.
-    return GoogleProvider(
-        client_id=client_id,
-        client_secret=client_secret,
-        base_url=base_url,
-        required_scopes=["openid", "email"],
-    )
-
-
 mcp = FastMCP(
     name="RoleReady",
-    auth=_build_auth(),
     instructions=(
         "RoleReady is a job-application copilot for international students. Use it "
         "to research a company + role (what they do, funding, visa-sponsorship "
@@ -119,39 +93,45 @@ mcp = FastMCP(
 # RoleReady runs on each user's OWN Gemini/Tavily keys. They paste them once in
 # the web app, which stores them in Supabase (`user_api_keys`).
 #
-# The caller is identified by the Google account they signed in with, so what we
-# have is a verified email, not a Supabase session. We therefore look the row up
-# through `api_keys_for_email`, a SECURITY DEFINER function that only
-# service_role may execute — it joins auth.users to user_api_keys inside the
-# database, so the matching happens in one place and the service_role key never
-# leaves this server. The email comes from Google's verified token, never from
-# anything the caller can set.
+# The caller is identified by the connection code Claude sends. We only ever see
+# the code, never a user id, so `keys_for_mcp_token` does the whole hop —
+# hash -> user -> their keys — inside the database. It is SECURITY DEFINER and
+# only service_role may execute it, so the service_role key never leaves this
+# server and the lookup can't be reached from a browser.
 #
-# Local stdio dev has no sign-in, so keys fall back to the project .env.
+# Local stdio dev has no code, so keys fall back to the project .env.
+
+_CONNECT_HELP = (
+    "This RoleReady connection needs your personal connection code. Open "
+    "RoleReady in your browser, sign in, go to 'API keys' → 'Use RoleReady in "
+    "Claude', generate a code, and reconnect with it."
+)
+
+_BAD_CODE_HELP = (
+    "That connection code isn't valid — it may have been revoked or mistyped. "
+    "Generate a new one in RoleReady under 'API keys' → 'Use RoleReady in Claude'."
+)
 
 _KEYS_HELP = (
-    "No API keys saved for your account. Open RoleReady in your browser, sign in "
-    "with Google, and paste your free Gemini and Tavily keys when prompted "
-    "(aistudio.google.com/apikey and app.tavily.com). They'll apply here too. "
-    "Use the SAME Google account you signed in to Claude with."
+    "No API keys saved for your account. Open RoleReady in your browser and "
+    "paste your free Gemini and Tavily keys under 'API keys' "
+    "(aistudio.google.com/apikey and app.tavily.com). They'll apply here too."
 )
 
 
-def _caller_email() -> str:
-    """The verified Google email of the current caller."""
-    from fastmcp.server.dependencies import get_access_token
+def _connection_code_hash() -> str:
+    """SHA-256 of the connection code on this request. Raises if absent."""
+    from fastmcp.server.dependencies import get_http_headers
 
-    token = get_access_token()
-    claims = getattr(token, "claims", None) or {}
-    email = str(claims.get("email") or "").strip().lower()
-    if not email:
-        raise ToolError(
-            "Your sign-in didn't include an email address, so your saved keys "
-            "can't be found. Reconnect to RoleReady and allow the email permission."
-        )
-    if claims.get("email_verified") is False:
-        raise ToolError("That Google account's email is not verified.")
-    return email
+    # FastMCP strips `authorization` by default so it can't be forwarded to
+    # downstream services by accident. Opt that one header back in — not
+    # include_all, which would hand every header to this code.
+    headers = get_http_headers(include={"authorization"}) or {}
+    raw = str(headers.get("authorization") or "").strip()
+    code = raw[7:].strip() if raw.lower().startswith("bearer ") else ""
+    if not code:
+        raise ToolError(_CONNECT_HELP)
+    return hashlib.sha256(code.encode("utf-8")).hexdigest()
 
 
 def _user_keys() -> tuple[Optional[str], Optional[str]]:
@@ -160,7 +140,7 @@ def _user_keys() -> tuple[Optional[str], Optional[str]]:
     if not AUTH_ENABLED:
         return None, None
 
-    email = _caller_email()
+    token_hash = _connection_code_hash()
 
     if not SUPABASE_URL or not SUPABASE_SERVICE_KEY:
         raise ToolError(
@@ -172,23 +152,26 @@ def _user_keys() -> tuple[Optional[str], Optional[str]]:
 
     try:
         resp = httpx.post(
-            f"{SUPABASE_URL}/rest/v1/rpc/api_keys_for_email",
+            f"{SUPABASE_URL}/rest/v1/rpc/keys_for_mcp_token",
             headers={
                 "apikey": SUPABASE_SERVICE_KEY,
                 "Authorization": f"Bearer {SUPABASE_SERVICE_KEY}",
                 "Content-Type": "application/json",
             },
-            json={"p_email": email},
+            json={"p_token_hash": token_hash},
             timeout=10.0,
         )
         resp.raise_for_status()
         rows = resp.json()
     except Exception as e:
-        raise ToolError(f"Could not load your saved API keys: {str(e)[:200]}")
+        raise ToolError(f"Could not check your connection code: {str(e)[:200]}")
 
+    # No row at all means the code matched nothing — never fall through to the
+    # server's own keys, or a stranger could spend the owner's quota.
     if not rows:
-        raise ToolError(_KEYS_HELP)
+        raise ToolError(_BAD_CODE_HELP)
 
+    # A row with no keys means the code is fine but they never saved any keys.
     gemini = (rows[0].get("gemini_key") or "").strip() or None
     tavily = (rows[0].get("tavily_key") or "").strip() or None
     if not gemini and not tavily:
