@@ -211,7 +211,13 @@ def _guard(fn, *args, **kwargs):
         if "RESOURCE_EXHAUSTED" in msg or "429" in msg:
             raise ToolError("Hit the free-tier per-minute limit — wait ~30s and retry.")
         if "API key" in msg or "API_KEY_INVALID" in msg or "PERMISSION_DENIED" in msg:
-            raise ToolError("A Gemini/Tavily API key is missing or invalid (check the .env).")
+            # Point people at whichever place their keys actually come from.
+            raise ToolError(
+                "One of your Gemini/Tavily API keys is invalid or expired. Open RoleReady "
+                "in your browser and re-paste it under 'API keys'."
+                if AUTH_ENABLED
+                else "A Gemini/Tavily API key is missing or invalid (check the .env)."
+            )
         raise ToolError(f"RoleReady failed: {msg[:300]}")
 
 

@@ -30,3 +30,8 @@ users.json
 
 # ── Personal data — don't publish real resumes ──────────────────────────────
 resumes/
+.vercel
+
+# Local-only: keeps the CLI-deployed backend bundle lean without affecting
+# the git-connected frontend project (see the file for why).
+.vercelignore
