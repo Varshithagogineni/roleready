@@ -116,7 +116,10 @@ export function SettingsDialog({ open: openProp, onOpenChange }: SettingsDialogP
         }
       />
       {/* Wider than the old key-only dialog: it now also shows a terminal command. */}
-      <DialogContent className="max-h-[85vh] overflow-y-auto sm:max-w-lg">
+      {/* DialogContent is a grid, and grid items default to min-width:auto — so
+          long unbreakable strings inside would widen the whole dialog. The
+          min-w-0 on the body below is what lets them shrink and truncate. */}
+      <DialogContent className="max-h-[85vh] overflow-x-hidden overflow-y-auto sm:max-w-lg">
         <DialogHeader>
           <DialogTitle>Use your own API keys</DialogTitle>
           <DialogDescription>
@@ -126,7 +129,7 @@ export function SettingsDialog({ open: openProp, onOpenChange }: SettingsDialogP
           </DialogDescription>
         </DialogHeader>
 
-        <div className="space-y-4 py-2">
+        <div className="min-w-0 space-y-4 py-2">
           <div className="space-y-2">
             <Label htmlFor="gemini-key">
               Gemini API key

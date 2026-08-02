@@ -120,7 +120,7 @@ export function ConnectClaudeSection({ userId }: { userId: string | undefined })
   const connected = tokens.length > 0
 
   return (
-    <div className="relative overflow-hidden rounded-xl border bg-gradient-to-br from-[#D97757]/[0.07] via-transparent to-violet-500/[0.07] p-4">
+    <div className="relative min-w-0 overflow-hidden rounded-xl border bg-gradient-to-br from-[#D97757]/[0.07] via-transparent to-violet-500/[0.07] p-4">
       {/* soft glow behind the mark */}
       <div
         aria-hidden
@@ -152,8 +152,10 @@ export function ConnectClaudeSection({ userId }: { userId: string | undefined })
       {fresh ? (
         <div className="relative mt-4 space-y-3">
           <Step n={1} title="Copy your connection code" warn="Shown only once">
-            <div className="flex min-w-0 items-center gap-2">
-              <code className="min-w-0 flex-1 truncate rounded-md border bg-background px-2.5 py-2 font-mono text-xs">
+            {/* The code wraps rather than truncates — it's shown once and the
+                user may want to read it back, unlike the command below. */}
+            <div className="flex min-w-0 items-start gap-2">
+              <code className="min-w-0 flex-1 rounded-md border bg-background px-2.5 py-2 font-mono text-xs break-all">
                 {fresh}
               </code>
               <CopyButton value={fresh} tone="solid" />
