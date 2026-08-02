@@ -48,40 +48,56 @@ from backend.schemas import (  # noqa: E402
 
 # ── Auth ──────────────────────────────────────────────────────────────────────
 # Auth applies ONLY to HTTP transports; stdio inherits the security of the local
-# machine that spawned it. So we make it opt-in: local stdio dev stays frictionless,
-# while the deployed HTTP server requires a real Supabase-issued JWT.
+# machine that spawned it. So we make it opt-in: local stdio dev stays
+# frictionless, while the deployed HTTP server requires a Google sign-in.
 #
 # Enable with:  MCP_REQUIRE_AUTH=true  MCP_BASE_URL=https://<deployed-host>
-# The JWTs are the SAME ones your React app already gets from Google sign-in —
-# FastMCP acts as a resource server and verifies them against Supabase's JWKS.
+#
+# Why Google and not Supabase: MCP clients expect to register themselves as an
+# OAuth client on the fly (dynamic client registration). Supabase Auth does not
+# offer that — Claude reports "Incompatible auth server: does not support
+# dynamic client registration" and cannot connect at all. FastMCP's Google
+# provider is an OAuth *proxy*: it presents dynamic registration to clients
+# while using one fixed Google OAuth app upstream. Users sign in with the same
+# Google account they use on the RoleReady website, so their saved keys match.
 
 AUTH_ENABLED = os.getenv("MCP_REQUIRE_AUTH", "").strip().lower() in ("1", "true", "yes")
 SUPABASE_URL = (os.getenv("SUPABASE_URL") or "").strip().rstrip("/")
-SUPABASE_ANON_KEY = (os.getenv("SUPABASE_ANON_KEY") or "").strip()
+# service_role: needed because a Google-authenticated caller has no Supabase JWT
+# for RLS to act on. Never expose this beyond the server.
+SUPABASE_SERVICE_KEY = (
+    os.getenv("SUPABASE_SERVICE_ROLE_KEY") or os.getenv("SUPABASE_KEY") or ""
+).strip()
 
 
 def _build_auth():
     if not AUTH_ENABLED:
         return None
 
-    from fastmcp.server.auth.providers.supabase import SupabaseProvider
+    from fastmcp.server.auth.providers.google import GoogleProvider
 
-    project_url = SUPABASE_URL
+    client_id = (os.getenv("GOOGLE_OAUTH_CLIENT_ID") or "").strip()
+    client_secret = (os.getenv("GOOGLE_OAUTH_CLIENT_SECRET") or "").strip()
     base_url = (os.getenv("MCP_BASE_URL") or "").strip()
-    if not project_url:
-        raise RuntimeError("MCP_REQUIRE_AUTH is on but SUPABASE_URL is not set.")
+
+    if not client_id or not client_secret:
+        raise RuntimeError(
+            "MCP_REQUIRE_AUTH is on but GOOGLE_OAUTH_CLIENT_ID / "
+            "GOOGLE_OAUTH_CLIENT_SECRET are not set."
+        )
     if not base_url:
         raise RuntimeError(
             "MCP_REQUIRE_AUTH is on but MCP_BASE_URL is not set "
             "(the public URL this MCP server is reachable at)."
         )
 
-    return SupabaseProvider(
-        project_url=project_url,
+    # The Google OAuth app must list <base_url>/auth/callback as an authorised
+    # redirect URI — that path is FastMCP's default and is where Google returns.
+    return GoogleProvider(
+        client_id=client_id,
+        client_secret=client_secret,
         base_url=base_url,
-        # Must match the project's Auth signing algorithm. roleready uses ES256
-        # (verified at {project_url}/auth/v1/.well-known/jwks.json).
-        algorithm=os.getenv("SUPABASE_JWT_ALG", "ES256"),  # type: ignore[arg-type]
+        required_scopes=["openid", "email"],
     )
 
 
@@ -101,17 +117,41 @@ mcp = FastMCP(
 
 # ── Per-user API keys (bring your own) ────────────────────────────────────────
 # RoleReady runs on each user's OWN Gemini/Tavily keys. They paste them once in
-# the web app, which stores them in Supabase (`user_api_keys`, RLS-protected).
-# Here we read that row back using the caller's own JWT, so Postgres RLS — not
-# this code — is what guarantees one user can never read another's keys.
+# the web app, which stores them in Supabase (`user_api_keys`).
 #
-# Local stdio dev has no JWT, so keys fall back to the project .env.
+# The caller is identified by the Google account they signed in with, so what we
+# have is a verified email, not a Supabase session. We therefore look the row up
+# through `api_keys_for_email`, a SECURITY DEFINER function that only
+# service_role may execute — it joins auth.users to user_api_keys inside the
+# database, so the matching happens in one place and the service_role key never
+# leaves this server. The email comes from Google's verified token, never from
+# anything the caller can set.
+#
+# Local stdio dev has no sign-in, so keys fall back to the project .env.
 
 _KEYS_HELP = (
     "No API keys saved for your account. Open RoleReady in your browser, sign in "
     "with Google, and paste your free Gemini and Tavily keys when prompted "
-    "(aistudio.google.com/apikey and app.tavily.com). They'll apply here too."
+    "(aistudio.google.com/apikey and app.tavily.com). They'll apply here too. "
+    "Use the SAME Google account you signed in to Claude with."
 )
+
+
+def _caller_email() -> str:
+    """The verified Google email of the current caller."""
+    from fastmcp.server.dependencies import get_access_token
+
+    token = get_access_token()
+    claims = getattr(token, "claims", None) or {}
+    email = str(claims.get("email") or "").strip().lower()
+    if not email:
+        raise ToolError(
+            "Your sign-in didn't include an email address, so your saved keys "
+            "can't be found. Reconnect to RoleReady and allow the email permission."
+        )
+    if claims.get("email_verified") is False:
+        raise ToolError("That Google account's email is not verified.")
+    return email
 
 
 def _user_keys() -> tuple[Optional[str], Optional[str]]:
@@ -120,30 +160,25 @@ def _user_keys() -> tuple[Optional[str], Optional[str]]:
     if not AUTH_ENABLED:
         return None, None
 
-    from fastmcp.server.dependencies import get_access_token
+    email = _caller_email()
 
-    token = get_access_token()
-    raw_jwt = getattr(token, "token", None)
-    if not raw_jwt:
-        raise ToolError("Could not read your access token — try reconnecting to RoleReady.")
-
-    if not SUPABASE_URL or not SUPABASE_ANON_KEY:
+    if not SUPABASE_URL or not SUPABASE_SERVICE_KEY:
         raise ToolError(
-            "Server misconfigured: SUPABASE_URL / SUPABASE_ANON_KEY are not set, "
-            "so your saved API keys can't be looked up."
+            "Server misconfigured: SUPABASE_URL / SUPABASE_SERVICE_ROLE_KEY are "
+            "not set, so your saved API keys can't be looked up."
         )
 
     import httpx
 
     try:
-        resp = httpx.get(
-            f"{SUPABASE_URL}/rest/v1/user_api_keys",
-            params={"select": "gemini_key,tavily_key"},
+        resp = httpx.post(
+            f"{SUPABASE_URL}/rest/v1/rpc/api_keys_for_email",
             headers={
-                "apikey": SUPABASE_ANON_KEY,
-                # The caller's own token — RLS scopes the query to their row.
-                "Authorization": f"Bearer {raw_jwt}",
+                "apikey": SUPABASE_SERVICE_KEY,
+                "Authorization": f"Bearer {SUPABASE_SERVICE_KEY}",
+                "Content-Type": "application/json",
             },
+            json={"p_email": email},
             timeout=10.0,
         )
         resp.raise_for_status()
