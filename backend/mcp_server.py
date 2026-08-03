@@ -119,8 +119,14 @@ _KEYS_HELP = (
 )
 
 
-def _connection_code_hash() -> str:
-    """SHA-256 of the connection code on this request. Raises if absent."""
+def _request_identity() -> tuple[str, str]:
+    """(sha256 of the connection code, User-Agent) for this request.
+
+    The User-Agent is how we tell which client is calling — e.g.
+    "claude-code/2.1.220 (sdk-cli)". The protocol's own clientInfo is not
+    usable here: we run stateless, so each request is independent and
+    clientInfo (sent only with `initialize`) comes back null on tool calls.
+    """
     from fastmcp.server.dependencies import get_http_headers
 
     # FastMCP strips `authorization` by default so it can't be forwarded to
@@ -131,7 +137,8 @@ def _connection_code_hash() -> str:
     code = raw[7:].strip() if raw.lower().startswith("bearer ") else ""
     if not code:
         raise ToolError(_CONNECT_HELP)
-    return hashlib.sha256(code.encode("utf-8")).hexdigest()
+    user_agent = str(headers.get("user-agent") or "")[:200]
+    return hashlib.sha256(code.encode("utf-8")).hexdigest(), user_agent
 
 
 def _user_keys() -> tuple[Optional[str], Optional[str]]:
@@ -140,7 +147,7 @@ def _user_keys() -> tuple[Optional[str], Optional[str]]:
     if not AUTH_ENABLED:
         return None, None
 
-    token_hash = _connection_code_hash()
+    token_hash, user_agent = _request_identity()
 
     if not SUPABASE_URL or not SUPABASE_SERVICE_KEY:
         raise ToolError(
@@ -158,7 +165,7 @@ def _user_keys() -> tuple[Optional[str], Optional[str]]:
                 "Authorization": f"Bearer {SUPABASE_SERVICE_KEY}",
                 "Content-Type": "application/json",
             },
-            json={"p_token_hash": token_hash},
+            json={"p_token_hash": token_hash, "p_client_ua": user_agent},
             timeout=10.0,
         )
         resp.raise_for_status()

@@ -17,6 +17,10 @@ export interface McpToken {
   label: string | null
   created_at: string
   last_used_at: string | null
+  /** Raw User-Agent of the client that last used this code, e.g.
+   *  "claude-code/2.1.220 (sdk-cli)". Null until it's used once. Stored raw so
+   *  a client we don't recognise yet can still be identified later. */
+  client_ua: string | null
 }
 
 /** The deployed MCP endpoint users connect Claude to. */
@@ -50,7 +54,7 @@ export function connectCommand(code: string): string {
 export async function listTokens(): Promise<McpToken[]> {
   const { data, error } = await supabase
     .from("mcp_tokens")
-    .select("id, token_prefix, label, created_at, last_used_at")
+    .select("id, token_prefix, label, created_at, last_used_at, client_ua")
     .order("created_at", { ascending: false })
   if (error) throw new Error(error.message)
   return data ?? []

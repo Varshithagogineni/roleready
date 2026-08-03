@@ -8,27 +8,8 @@ import {
   revokeToken,
   type McpToken,
 } from "@/lib/mcpTokens"
+import { ClaudeMark, identifyClient } from "@/lib/mcpClients"
 import { Check, Copy, Loader2, Trash2 } from "lucide-react"
-
-/** Claude's sunburst mark, inline so it costs no network request.
- *  Used to signal "works with Claude" — not an endorsement. */
-function ClaudeMark({ className }: { className?: string }) {
-  return (
-    <svg viewBox="0 0 24 24" className={className} fill="currentColor" aria-hidden="true">
-      {Array.from({ length: 12 }).map((_, i) => (
-        <rect
-          key={i}
-          x="11.15"
-          y="2.1"
-          width="1.7"
-          height="8.1"
-          rx="0.85"
-          transform={`rotate(${i * 30} 12 12)`}
-        />
-      ))}
-    </svg>
-  )
-}
 
 function CopyButton({ value, tone = "ghost" }: { value: string; tone?: "ghost" | "solid" }) {
   const [copied, setCopied] = useState(false)
@@ -200,29 +181,61 @@ export function ConnectClaudeSection({ userId }: { userId: string | undefined })
 
       {tokens.length > 0 && (
         <ul className="relative mt-3 space-y-1.5">
-          {tokens.map((t) => (
-            <li
-              key={t.id}
-              className="group flex min-w-0 items-center gap-3 rounded-lg border bg-background/60 px-3 py-2 transition-colors hover:bg-background"
-            >
-              <span className="size-1.5 shrink-0 rounded-full bg-emerald-500" />
-              <div className="min-w-0 flex-1">
-                <div className="truncate font-mono text-xs">{t.token_prefix}…</div>
-                <div className="text-muted-foreground truncate text-[11px]">
-                  {t.label || "Unnamed device"} · {relTime(t.last_used_at)}
-                </div>
-              </div>
-              <button
-                type="button"
-                aria-label={`Revoke code ${t.token_prefix}`}
-                title="Revoke — this device stops working immediately"
-                onClick={() => void handleRevoke(t.id)}
-                className="text-muted-foreground shrink-0 rounded-md p-1.5 opacity-0 transition-all hover:bg-red-500/10 hover:text-red-500 focus-visible:opacity-100 group-hover:opacity-100"
+          {tokens.map((t) => {
+            const client = identifyClient(t.client_ua)
+            return (
+              <li
+                key={t.id}
+                className="group flex min-w-0 items-center gap-2.5 rounded-lg border bg-background/60 px-3 py-2 transition-colors hover:bg-background"
               >
-                <Trash2 className="size-3.5" />
-              </button>
-            </li>
-          ))}
+                <span
+                  className="flex size-7 shrink-0 items-center justify-center rounded-md"
+                  style={
+                    client
+                      ? {
+                          backgroundColor: `${client.color}1F`,
+                          color: client.color,
+                          boxShadow: `inset 0 0 0 1px ${client.color}33`,
+                        }
+                      : undefined
+                  }
+                  title={t.client_ua ?? "Not used yet"}
+                >
+                  {client ? (
+                    client.mark
+                  ) : (
+                    <span className="bg-muted-foreground/30 size-1.5 rounded-full" />
+                  )}
+                </span>
+
+                <div className="min-w-0 flex-1">
+                  <div className="flex min-w-0 items-center gap-1.5">
+                    <span className="truncate text-xs font-medium">
+                      {client ? client.name : "Waiting for first use"}
+                    </span>
+                    {t.label && (
+                      <span className="bg-muted text-muted-foreground shrink-0 rounded px-1.5 py-0.5 text-[10px]">
+                        {t.label}
+                      </span>
+                    )}
+                  </div>
+                  <div className="text-muted-foreground truncate font-mono text-[11px]">
+                    {t.token_prefix}… · {relTime(t.last_used_at)}
+                  </div>
+                </div>
+
+                <button
+                  type="button"
+                  aria-label={`Revoke code ${t.token_prefix}`}
+                  title="Revoke — this device stops working immediately"
+                  onClick={() => void handleRevoke(t.id)}
+                  className="text-muted-foreground shrink-0 rounded-md p-1.5 opacity-0 transition-all hover:bg-red-500/10 hover:text-red-500 focus-visible:opacity-100 group-hover:opacity-100"
+                >
+                  <Trash2 className="size-3.5" />
+                </button>
+              </li>
+            )
+          })}
         </ul>
       )}
 
